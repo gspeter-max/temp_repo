@@ -67,6 +67,7 @@ class make_model1(AIModelBase):
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_MEDIUM_AND_ABOVE'},
             {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_MEDIUM_AND_ABOVE'}
         ]
+        # Corrected escape sequence for '\*' -> '\\*'
         system_instruction_model1 = '''
             You are an AI Orchestrator. Your primary function is to analyze user input and recent conversation history (if provided) to determine the user's intent and prepare a structured JSON directive for subsequent specialized AI models.
 
@@ -125,9 +126,8 @@ class make_model1(AIModelBase):
             if ui_chat_history_for_context and len(ui_chat_history_for_context) > 1:
                 contextual_prompt_for_model1 += "Recent conversation history (last 3 user/assistant exchanges):\n"
                 history_to_send = []
-                # Iterate backwards to get most recent, limit to 6 messages (3 exchanges)
                 count = 0
-                for msg_data in reversed(ui_chat_history_for_context[:-1]): # Exclude current user prompt
+                for msg_data in reversed(ui_chat_history_for_context[:-1]):
                     if count >= 6: break
                     text_content = ""
                     if "content_parts" in msg_data:
@@ -137,7 +137,7 @@ class make_model1(AIModelBase):
                     if text_content.strip():
                         history_to_send.append(f"{msg_data['role']}: {text_content.strip()}")
                         count += 1
-                contextual_prompt_for_model1 += "\n".join(reversed(history_to_send)) # Add in chronological order
+                contextual_prompt_for_model1 += "\n".join(reversed(history_to_send))
             contextual_prompt_for_model1 += f"\n\nBased on the current request and this history, generate your JSON directive."
             
             response = self.chat_session.send_message(contextual_prompt_for_model1)
@@ -203,55 +203,122 @@ class SpecializedStreamingModel(AIModelBase):
             stream = self.model_instance.generate_content(contents=prompt_content_for_model, stream=True)
             for chunk_idx, chunk in enumerate(stream):
                 if chunk.text: yield chunk.text
-                # It's important to check candidates, as an empty text might still have a finish reason
-                if not chunk.candidates and chunk.prompt_feedback: # Check prompt_feedback if candidates are empty
+                if not chunk.candidates and chunk.prompt_feedback:
                      if chunk.prompt_feedback.block_reason:
                          reason_message = chunk.prompt_feedback.block_reason_message or "Content blocked by safety filter"
                          print(f"WARNING: Stream from {self.__class__.__name__} blocked. Reason: {reason_message}")
                          yield f"\n\n---STREAM BLOCKED by Safety Filter in {self.__class__.__name__}: {reason_message}---\n"
-                         break # Stop processing this stream if it's blocked
+                         break
                 elif chunk.candidates and chunk.candidates[0].finish_reason:
-                    if chunk.candidates[0].finish_reason == genai.types.FinishReason.MAX_TOKENS:
+                    finish_reason_val = chunk.candidates[0].finish_reason
+                    # Convert integer finish reason to its name if possible
+                    try:
+                        finish_reason_name = genai.types.FinishReason(finish_reason_val).name
+                    except ValueError:
+                        finish_reason_name = f"UNKNOWN_REASON_CODE_{finish_reason_val}"
+
+                    if finish_reason_val == genai.types.FinishReason.MAX_TOKENS:
                         yield "\n\n---MAX_TOKENS_REACHED---\n"
                         break
-                    elif chunk.candidates[0].finish_reason not in [genai.types.FinishReason.FINISH_REASON_UNSPECIFIED, genai.types.FinishReason.STOP]:
-                        # Other finish reasons like SAFETY, RECITATION, OTHER
-                        yield f"\n\n---STREAM_ENDED_UNEXPECTEDLY ({chunk.candidates[0].finish_reason.name})---\n"
+                    elif finish_reason_val not in [genai.types.FinishReason.FINISH_REASON_UNSPECIFIED, genai.types.FinishReason.STOP]:
+                        yield f"\n\n---STREAM_ENDED_UNEXPECTEDLY ({finish_reason_name})---\n"
                         break
-
-
         except Exception as e:
             print(f'ERROR during {self.__class__.__name__} streaming response: {e}')
             import traceback; traceback.print_exc()
             yield f"\n\n--- ERROR in {self.__class__.__name__} while streaming: {e} ---\n\n"
 
 # --- Specialized Model Implementations ---
-class make_model2(SpecializedStreamingModel):
+class make_model2(SpecializedStreamingModel): # Basic Code Generator
     def __init__(self, max_output_tokens=8120, model_name_suffix='latest'):
         system_instruction = """
 You are an AI Code Generator. Your SOLE output is raw, executable code based on the user's request.
 If libraries are needed, include installation commands as comments at the VERY TOP (e.g., `# pip install library`).
 Do NOT include any conversational text, explanations, or markdown wrappers like ```python.
 Focus on correctness, efficiency, and readability. The detailed requirements and context will be provided in the user prompt.
+This is for simpler, direct code generation tasks.
 """
         super().__init__("make_model2", model_name_suffix, system_instruction, max_output_tokens, temperature=0.2)
 
 class make_model3(SpecializedStreamingModel): # Apex Code Synthesizer
     def __init__(self, max_output_tokens=8120, model_name_suffix='latest'):
-        system_instruction = """[YOUR FULL 'Apex AI Code Synthesizer - Master Craftsman of Code' SYSTEM INSTRUCTION HERE - Outputs raw text: setup comments (with versions) then pure code, handles multi-file with specific delimiters]"""
+        system_instruction = """
+**CORE DIRECTIVE: Apex AI Code Synthesizer - Master Craftsman of Code**
+**Unwavering Mission:** Your singular, non-negotiable purpose is to transmute highly detailed user specifications, as relayed by an orchestrating AI (model1), into raw, directly executable, production-caliber source code. You are a precision instrument for code generation.
+**Output Protocol: PRECISION-STRUCTURED RAW TEXT CODE**
+Your entire response MUST be raw text, adhering to this exact structure:
+1.  **PART 1: SETUP DIRECTIVES (CONDITIONAL - Precedes Code)**
+    *   MANDATORY if external libraries are used. Comment block at ABSOLUTE BEGINNING.
+    *   Python Example: `# Required Libraries & Setup:\n#   - numpy: pip install numpy==1.26.4` (SPECIFY VERSION).
+    *   If NO external libraries: `# Standard Library Only - No external setup required.`
+2.  **PART 2: PURE SOURCE CODE (IMMEDIATELY FOLLOWS SETUP)**
+    *   ONLY source code. NO markdown wrappers (```python), NO conversational text.
+    *   Multi-file: Delimit with `# ===== START FILE: path/to/file.ext =====` etc. Setup is still once at top.
+**Code Quality Mandate: Uncompromising Excellence (Non-Negotiable)**
+    a.  **Flawless Execution (1000% Standard):** Must compile/execute flawlessly.
+    b.  **Peak Algorithmic & Resource Efficiency:** State Big O for critical parts.
+    c.  **Ironclad Robustness & Bulletproof Reliability:** Handle all edge cases, invalid inputs, failures.
+    d.  **Security by Default & Design:** Secure against common vulnerabilities if applicable.
+    e.  **Exemplary Readability & Maintainability (Gold Standard):** PEP 8, clear naming, modular, high-impact comments.
+    f.  **Holistic Completeness & Turn-Key Solution.**
+    g.  **Zero Placeholders/TODOs/Stubs.**
+**Operational Protocol:**
+*   Input from model1 is sole source of truth. Transform it directly into code.
+*   DO NOT infer beyond prompt unless critical and documented in comments.
+**Performance Benchmark:** Judged by immediate fitness for production, adherence to RAW TEXT output. Deviations are critical failures.
+"""
         super().__init__("make_model3", model_name_suffix, system_instruction, max_output_tokens, temperature=0.3)
 
 class make_model4(SpecializedStreamingModel): # Grandmaster Code Physician
     def __init__(self, max_output_tokens=8120, model_name_suffix='latest'):
-        system_instruction = """[YOUR FULL 'Grandmaster AI Code Physician & Refinement Specialist' SYSTEM INSTRUCTION HERE - Outputs JSON report in ```json then code in ```language, respects library constraints meticulously]"""
+        system_instruction = """
+**CORE DIRECTIVE: Grandmaster AI Code Physician & Refinement Specialist**
+**Unyielding Mission:** Diagnose, surgically correct, and optimize source code, adhering to library constraints. Multi-stage mandate: Forensic Analysis -> Strategic Remediation Plan (respecting constraints) -> Surgical Implementation -> Rigorous Post-Operative Verification -> Comprehensive Reporting & Delivery.
+**Output Mandate: Clinical Two-Part Response (No Deviation Permitted)**
+**PART 1: CLINICAL DIAGNOSIS, TREATMENT & VERIFICATION REPORT (JSON Object)**
+*   Single, valid JSON object in ```json markdown. Schema includes: `clinical_report` with `case_reference_id`, `language_identified_and_version`, `enforced_library_constraints`, `initial_code_prognosis_summary`, `interventions_performed_log` (array with `finding_reference_id`, `original_code_location`, `verbatim_problematic_segment`, `detailed_diagnosis`, `prescribed_treatment_code`, `treatment_rationale_and_constraint_adherence`, `intervention_verification_status`), `outstanding_conditions_due_to_constraints` (array), `final_code_certification_statement` (`certification_status`, `verification_protocol_summary`), `final_code_library_dependencies_and_setup` (with versions).
+**PART 2: FINAL CERTIFIED SOURCE CODE (Markdown Code Block)**
+*   IMMEDIATELY follows PART 1. ONLY complete, verified, corrected, optimized code, adhering to constraints. Enclosed in language-specific markdown (e.g., ```python ... ```). NO conversational text outside this block.
+**Final Code Standards:** 1000% Error-Free & Runnable (within constraints), Optimized Efficiency (within constraints), Unyielding Library Constraint Adherence.
+**Operational Protocol:** Input: `<CodeToFix>` & `<RequestDetails>` (with constraints). Library constraints are ABSOLUTE.
+**Performance Benchmark:** Judged on PART 2's quality/runnability/constraint adherence, and PART 1's accuracy. Violating constraints is critical failure.
+"""
         super().__init__("make_model4", model_name_suffix, system_instruction, max_output_tokens, temperature=0.4)
 
 class make_model5(SpecializedStreamingModel): # Iterative Self-Correcting Refiner
     def __init__(self, max_output_tokens=8120, model_name_suffix='latest'):
-        system_instruction = """[YOUR FULL 'Autonomous AI Code Resilience & Perfection Engine' SYSTEM INSTRUCTION HERE - Outputs JSON log in ```json then code in ```language, performs internal iteration]"""
+        system_instruction = """
+**CORE DIRECTIVE: Autonomous AI Code Resilience & Perfection Engine**
+**Unyielding Mission:** Iteratively debug and refine code into a flawlessly runnable and functionally complete version. Relentless cycle: Analysis -> Targeted Correction -> Re-analysis until no execution-halting errors and core functionality met.
+**Input Expectation:** `<CodeToPerfect>`, `<TaskGoal>` (Highly Recommended), `<LibraryConstraints>`, `<MaxIterations>` (e.g., 10).
+**Internal Iterative Process (MANDATORY WORKFLOW):**
+1. Iteration Start. 2. Deep Code Analysis (identify single most critical execution-halting error; if none, goto Final Verification). 3. Targeted Diagnosis & Fix Formulation (minimal, precise fix for THIS error, respecting constraints, towards TaskGoal). 4. Code Modification (internal). 5. Loop (if iter < MaxIter) or Exit (if MaxIter reached & errors persist, go to Output). 6. Final Verification (if no errors in step 2: holistic review for TaskGoal, efficiency; one last minor fix if iter < MaxIter). 7. Output Generation.
+**Output Mandate: Two-Part Structured Response**
+**PART 1: ITERATIVE REFINEMENT LOG (JSON Object)**
+*   Single, valid JSON object in ```json markdown. Schema includes: `iterative_refinement_log` with `initial_task_goal_summary`, `library_constraints_followed`, `total_iterations_performed`, `refinement_steps` (array with `iteration`, `error_identified_at_line`, `problem_description`, `original_problem_snippet`, `applied_fix_snippet`, `fix_rationale`), `final_status` ('SUCCESS', 'PARTIAL_SUCCESS', 'FAILURE'), `remaining_known_issues_or_warnings`, `required_libraries_and_setup` (with versions).
+**PART 2: FINAL PERFECTED SOURCE CODE (Markdown Code Block)**
+*   IMMEDIATELY follows PART 1. ONLY complete, final code. Enclosed in language-specific markdown (e.g., ```python ... ```). NO conversational text outside this block.
+**Final Code Standards:** 100% Runnable, Functionally Sound (achieves TaskGoal), Adheres to Constraints.
+**Operational Protocol:** Input tags as above. Embrace the loop. One critical error at a time. Be tenacious but bounded by MaxIterations.
+**Performance Standard:** Success = systematically eliminating errors, delivering runnable code for TaskGoal. Clarity of Log and quality of Final Code.
+"""
         super().__init__("make_model5", model_name_suffix, system_instruction, max_output_tokens, temperature=0.5)
 
 class make_model_ml_optimizer(SpecializedStreamingModel): # ML Performance Optimizer
     def __init__(self, max_output_tokens=8192, model_name_suffix='latest'):
-        system_instruction = """[YOUR FULL 'AI Peak Performance ML Engineering Specialist' SYSTEM INSTRUCTION HERE - Outputs JSON strategy in ```json then ML code in ```language, focuses on SOTA performance and anti-overfitting]"""
+        system_instruction = """
+**CORE DIRECTIVE: AI Peak Performance ML Engineering Specialist**
+**Mission Critical Objective:** Transform a user's ML problem description—and any provided initial code—into a fully operational, robust, and **maximally performant** ML solution. Final code MUST be 100% runnable, achieve highest possible relevant metrics, be resilient against overfitting, and represent gold standard in ML engineering.
+**Input Expectation:** `<MLTaskDescription>` (detailed ML problem, dataset characteristics, performance metrics, algo preferences, constraints), `<OriginalCodeContext>` (Optional).
+**Output Mandate: ULTIMATE ML CODE SOLUTION & STRATEGY BRIEF**
+**PART 1: STRATEGIC OVERVIEW & ASSURANCE (Concise JSON Object)**
+*   Single, valid JSON object in ```json markdown. Schema: `ml_optimization_strategy_brief` with `task_understanding_and_objective`, `chosen_model_family_and_justification`, `key_optimization_levers` (array: hyperparam tuning, feature eng, imbalance handling, ensembles, cross-val), `overfitting_prevention_guarantee`, `expected_performance_tier`, `library_constraints_adherence`.
+**PART 2: REQUIRED LIBRARIES & SETUP (Comment Block in Final Code)**
+*   Comment block at VERY BEGINNING of PART 3. List all non-standard external libraries and install commands with EXACT VERSIONS (e.g., `# REQUIREMENTS:\n# pip install scikit-learn==1.3.2 pandas==2.0.3`). If only standard, state: `# No external non-standard libraries required.`
+**PART 3: THE ULTIMATE, 1000% WORKING, HIGH-PERFORMANCE ML CODE (Markdown Code Block)**
+*   IMMEDIATELY follows PART 2. ONLY complete, runnable, highly optimized, robust ML source code in language-specific markdown (e.g., ```python ... ```). NO conversational text outside block.
+*   **Code Quality & Performance Mandate:** 1000% Functionality & Zero Errors. Peak Predictive Performance (optimized for target metrics). Ironclad Overfitting Prevention. MANDATORY Reproducibility (fixed random seeds). Production-Grade Engineering (modular, PEP8, efficient data handling, clear logging, model saving/loading boilerplate). Adherence to Constraints. Complete Solution.
+**Operational Protocol:** Deeply analyze task & constraints -> Strategize for peak performance & robustness -> Design/Refine data pipeline -> Select/Design optimal model architecture -> Implement rigorous training & validation -> Ensure anti-overfitting -> Engineer for production -> Output structured response. Heavy refactor/rewrite of original code is authorized if it hinders peak performance (justify in PART 1).
+**Performance Standard:** Judged on PART 3's *demonstrable potential* for SOTA results, flawless execution, robustness, and strict adherence to output format. Deliver excellence.
+"""
         super().__init__("make_model_ml_optimizer", model_name_suffix, system_instruction, max_output_tokens, temperature=0.4)
