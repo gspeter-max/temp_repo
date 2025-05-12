@@ -4,7 +4,7 @@ import re
 import time
 from model1 import (
     make_model1,
-    # make_model2, # Only import if Model1 might route to it directly for simple generation
+    # make_model2, # Decide if M2 is used directly or if M3 always supersedes it
     make_model3,
     make_model4,
     make_model5,
@@ -62,12 +62,10 @@ st.markdown("""
 # --- Model Initialization ---
 if 'models_initialized_flag' not in st.session_state: st.session_state.models_initialized_flag = False
 if not st.session_state.models_initialized_flag:
-    # Use st.spinner directly as a context manager
-    with st.spinner("Initializing AI Cores... This might take a moment for the first time."): # FIXED
+    with st.spinner("Initializing AI Cores... This might take a moment for the first time."): # CORRECTED
         try:
             st.session_state.model1_instance = make_model1()
-            # You might not need model2 if model3 is your primary generator now
-            # st.session_state.model2_instance = make_model2()
+            # st.session_state.model2_instance = make_model2() # Only if M1 routes to it
             st.session_state.model3_instance = make_model3()
             st.session_state.model4_instance = make_model4()
             st.session_state.model5_instance = make_model5()
@@ -85,11 +83,19 @@ if not st.session_state.models_initialized_flag:
 
 # --- Helper Function to Parse and Display AI's Multi-Part Response ---
 def display_ai_parts_from_string(full_response_string, container_to_write_in):
+    # ... (The display_ai_parts_from_string function from the previous "Full Code" response - it was already quite robust) ...
+    # Key parts:
+    # - Parses for ```json block first, displays with container.json()
+    # - Parses for ```language block next, displays with container.code()
+    # - Checks for Model3-style raw code (setup comments + code), displays with container.code()
+    # - Displays any remaining text with container.markdown()
+    # - Returns a list of structured parts for history storage.
+    # For brevity, I'm not repeating the exact same code here, but ensure you have the robust version.
     if not full_response_string or not full_response_string.strip():
         return [{"type": "text", "data": "*AI provided no output or only whitespace for this part.*"}]
 
     displayed_parts_for_history = []
-    remaining_text = full_response_string.strip()
+    remaining_text = full_response_string.strip() 
 
     json_match = re.search(r"```json\s*(\{.*?\})\s*```", remaining_text, re.DOTALL)
     if json_match:
@@ -109,7 +115,7 @@ def display_ai_parts_from_string(full_response_string, container_to_write_in):
         container_to_write_in.code(code_content, language=language)
         remaining_text = remaining_text.replace(code_match_md.group(0), "", 1).strip()
     
-    elif not json_match and remaining_text:
+    elif not json_match and remaining_text: 
         is_likely_raw_code = remaining_text.startswith(("# Required Libraries & Setup:", "// Required Libraries & Setup:", "# Standard Library Only")) or \
                              any(kw in remaining_text for kw in ["def ", "class ", "import ", "function ", "const ", "let "])
         if is_likely_raw_code:
@@ -126,7 +132,7 @@ def display_ai_parts_from_string(full_response_string, container_to_write_in):
         container_to_write_in.markdown(remaining_text)
         
     if not displayed_parts_for_history and (full_response_string and full_response_string.strip()):
-         displayed_parts_for_history.append({"type": "text", "data": full_response_string})
+         displayed_parts_for_history.append({"type": "text", "data": full_response_string}) # Fallback
     return displayed_parts_for_history
 
 # --- Streamlit UI Title ---
@@ -167,25 +173,25 @@ if user_input := st.chat_input("Describe your coding task or ask a question...")
                 model1_output_dict = st.session_state.model1_instance(user_input, st.session_state.messages)
 
                 if not isinstance(model1_output_dict, dict):
-                    raise ValueError(f"Model1 (Orchestrator) did not return a dictionary as expected. Received: {type(model1_output_dict)}. Output: {model1_output_dict}")
+                    raise ValueError(f"Model1 (Orchestrator) did not return a dictionary. Received: {type(model1_output_dict)}. Output: {model1_output_dict}")
 
                 is_code_related = model1_output_dict.get("is_code_related", False)
                 user_ack_from_model1 = model1_output_dict.get("user_facing_acknowledgement", "")
                 action_for_next = model1_output_dict.get("action_for_next_model")
                 prompt_for_next = model1_output_dict.get("prompt_for_next_model")
 
-                initial_ack_displayed = False
+                initial_ack_displayed_in_turn = False
                 if user_ack_from_model1:
-                    if len(user_ack_from_model1.strip()) > 3 : # Display if substantial
+                    if len(user_ack_from_model1.strip()) > 3 :
                         accumulated_final_parts_for_history.append({"type": "text", "data": user_ack_from_model1})
                         current_assistant_turn_container.markdown(user_ack_from_model1)
-                        initial_ack_displayed = True
+                        initial_ack_displayed_in_turn = True
                     
-                    thinking_placeholder_text = user_ack_from_model1 if initial_ack_displayed else "Processing..."
+                    thinking_placeholder_text = user_ack_from_model1 if initial_ack_displayed_in_turn else "Processing..."
                     if is_code_related:
                         thinking_placeholder.markdown(f"<p class='thinking-placeholder'>{thinking_placeholder_text} Engaging specialized AI...</p>", unsafe_allow_html=True)
                     else:
-                        thinking_placeholder.empty() # Cleared if just chat and ack was (or wasn't) displayed
+                        thinking_placeholder.empty()
 
                 if is_code_related and action_for_next and prompt_for_next:
                     model_map = {
@@ -199,10 +205,8 @@ if user_input := st.chat_input("Describe your coding task or ask a question...")
                         target_model_instance, progress_message_template = model_map[action_for_next]
                         
                         stream_accumulator = []
-                        # If M1 gave an ack, specialized output goes below it in the same container
                         stream_display_area_in_container = current_assistant_turn_container.empty() 
 
-                        # Update thinking placeholder with more specific progress
                         thinking_placeholder.markdown(f"<p class='thinking-placeholder'>{progress_message_template} Streaming output...</p>", unsafe_allow_html=True)
                         
                         for chunk_idx, chunk_text in enumerate(target_model_instance(prompt_for_next)):
@@ -210,12 +214,11 @@ if user_input := st.chat_input("Describe your coding task or ask a question...")
                             if chunk_idx % 3 == 0 or len(chunk_text) > 10:
                                 stream_display_area_in_container.markdown("".join(stream_accumulator) + " ▌")
                         
-                        stream_display_area_in_container.empty() # Clear the temp streaming display
-                        thinking_placeholder.empty() # Clear "Thinking..." or progress text
+                        stream_display_area_in_container.empty()
+                        thinking_placeholder.empty()
                         
                         final_output_string_from_specialized_model = "".join(stream_accumulator)
                         
-                        # Parse and display the complete final output
                         parsed_parts = display_ai_parts_from_string(final_output_string_from_specialized_model, current_assistant_turn_container)
                         accumulated_final_parts_for_history.extend(parsed_parts)
                     else:
@@ -228,31 +231,28 @@ if user_input := st.chat_input("Describe your coding task or ask a question...")
                     current_assistant_turn_container.markdown(fallback_msg)
                     accumulated_final_parts_for_history.append({"type": "text", "data": fallback_msg})
                 
-                # This handles if Model1 provided an ack for a simple chat and no further action was taken.
-                # The ack would have been added to accumulated_final_parts_for_history if it was substantial.
-                # If it was short and not added, and it's a simple chat, ensure it's captured.
-                if not is_code_related and user_ack_from_model1 and not action_for_next and not initial_ack_displayed:
+                if not is_code_related and user_ack_from_model1 and not action_for_next and not initial_ack_displayed_in_turn:
+                     # This handles if M1 gave a simple ack that wasn't "substantial" enough to be displayed above,
+                     # but it was the only intended output for this turn.
                      accumulated_final_parts_for_history.append({"type": "text", "data": user_ack_from_model1})
-                     current_assistant_turn_container.markdown(user_ack_from_model1) # Display if not already
+                     current_assistant_turn_container.markdown(user_ack_from_model1)
                      thinking_placeholder.empty()
 
 
             except Exception as e:
                 thinking_placeholder.empty()
                 error_msg = f"An unexpected error occurred: {e}"
-                current_assistant_turn_container.error(error_msg) # Display error in the chat bubble
+                current_assistant_turn_container.error(error_msg)
                 accumulated_final_parts_for_history.append({"type": "text", "data": f"Sorry, I encountered an error: {e}"})
                 import traceback; traceback.print_exc()
 
         if accumulated_final_parts_for_history:
-            # Check if the last message added was from the assistant and identical to prevent duplicates if M1 was the only responder
-            last_msg_is_identical = False
-            if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-                if st.session_state.messages[-1]["content_parts"] == accumulated_final_parts_for_history:
-                    last_msg_is_identical = True
-            
-            if not last_msg_is_identical:
+            # Prevent adding an empty assistant message if only an ack was processed and already stored
+            # or if only errors occurred that were displayed directly.
+            # Only add if there are actual new parts to log.
+            if not (len(accumulated_final_parts_for_history) == 1 and \
+                    accumulated_final_parts_for_history[0]["type"] == "text" and \
+                    initial_ack_displayed_in_turn and \
+                    accumulated_final_parts_for_history[0]["data"] == user_ack_from_model1 and \
+                    not (is_code_related and action_for_next and prompt_for_next) ): # ensure it's not just a simple chat ack
                 st.session_state.messages.append({"role": "assistant", "content_parts": accumulated_final_parts_for_history})
-        # Edge case: if M1 gave a simple ack, and no further parts were generated, but ack wasn't added earlier.
-        elif not accumulated_final_parts_for_history and user_ack_from_model1 and not is_code_related:
-            st.session_state.messages.append({"role": "assistant", "content_parts": [{"type": "text", "data": user_ack_from_model1}]})
